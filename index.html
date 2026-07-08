@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code Usage</title>
+<style>
+:root{--bg:#0f1115;--panel:#181b22;--card:#1d212b;--line:#2a2e37;--tx:#e6e8eb;--mut:#9aa0aa;--acc:#3a4150;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+header{padding:18px 22px 6px;}
+header h1{margin:0;font-size:18px;font-weight:650;}
+.gen{color:var(--mut);font-size:12px;margin-top:2px;}
+.controls{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:10px 0 2px;}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+.seg button{background:transparent;border:0;border-left:1px solid var(--line);color:var(--mut);padding:6px 14px;cursor:pointer;font-size:13px;}
+.seg button:first-child{border-left:0;}
+.seg button.active{background:var(--panel);color:var(--tx);}
+.ctl-lab{color:var(--mut);font-size:12px;}
+#periodbox input{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:13px;margin-left:6px;color-scheme:dark;}
+nav#tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5;}
+.tab{background:transparent;border:1px solid var(--line);color:var(--mut);padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;}
+.tab:hover{color:var(--tx);}
+.tab.active{background:var(--panel);color:var(--tx);border-color:var(--acc);}
+main{padding:18px 22px 40px;max-width:900px;}
+.panel{display:none;}
+.panel.active{display:block;}
+.meta{color:var(--mut);font-size:12px;margin-bottom:12px;}
+.chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;}
+.chip.ok{background:rgba(34,197,94,.15);color:#22c55e;}
+.chip.warn{background:rgba(245,158,11,.15);color:#f59e0b;}
+.chip.bad{background:rgba(239,68,68,.15);color:#ef4444;}
+.chip.muted{background:rgba(154,160,170,.15);color:var(--mut);}
+.strip{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px;}
+.metric{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:150px;}
+.mlabel{color:var(--mut);font-size:12px;}
+.mval{font-size:28px;font-weight:680;margin:2px 0;}
+.mreset{color:var(--mut);font-size:12px;}
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px 8px;margin-bottom:16px;}
+.chart-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+.chart-title{font-size:13px;font-weight:600;}
+.legend{font-size:11px;color:var(--mut);}
+.lg{margin-left:10px;}
+.lg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle;}
+svg.chart{width:100%;height:auto;display:block;touch-action:pan-y;}
+.grid{stroke:var(--line);stroke-width:1;}
+.vgrid{stroke:var(--line);stroke-width:1;stroke-dasharray:2 4;opacity:.6;}
+.ylab{fill:var(--mut);font-size:10px;text-anchor:end;}
+.xlab{fill:var(--mut);font-size:10px;text-anchor:middle;}
+.empty{color:var(--mut);font-size:13px;padding:30px 0;text-align:center;line-height:1.7;}
+.hov{pointer-events:none;}
+.xhair{stroke:var(--mut);stroke-width:1;stroke-dasharray:3 3;}
+.hdot{stroke:var(--bg);stroke-width:1.5;}
+.tip{position:absolute;display:none;z-index:4;pointer-events:none;white-space:nowrap;background:var(--card);border:1px solid var(--acc);border-radius:8px;padding:6px 10px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.45);}
+.tip.show{display:block;}
+.tip-t{color:var(--mut);font-size:11px;margin-bottom:2px;}
+.tip-r{display:flex;align-items:center;gap:6px;}
+.tip-r i{width:9px;height:9px;border-radius:2px;flex:none;}
+.tip-r b{margin-left:auto;padding-left:12px;font-weight:600;}
+footer{color:var(--mut);font-size:11px;padding:0 22px 30px;}
+</style></head>
+<body>
+<header><h1>Claude Code Usage</h1>
+<div class="gen">data updated <span id="gen">—</span> · timezone <span id="tz"></span></div>
+<div class="controls">
+  <span class="seg" id="freq"></span>
+  <span class="ctl-lab">period<span id="periodbox"></span></span>
+</div></header>
+<nav id="tabs"></nav>
+<main id="panels"></main>
+<footer>Server-reported rolling-window utilization, captured hourly. Points are the peak in each bucket. Countdowns are live (current period only). All times are IST (Asia/Kolkata).</footer>
+<script>
+const C5='#f59e0b';   // 5-hour window
+const CW='#3b82f6';   // weekly window
+const FREQS=['daily','weekly','monthly'];
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const WD=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+let IDX=null, FREQ='monthly', ACTIVE=null;   // ACTIVE = account label (persists across changes)
+const CACHE={};       // month key -> doc
+
+// --- display timezone: pinned to IST regardless of the viewer's browser tz ---
+const TZOFF=330*60;              // Asia/Kolkata = UTC+5:30, no DST -> fixed offset is safe
+const TZLABEL='IST';
+const tzD=ep=>new Date((ep+TZOFF)*1000);            // read IST wall-clock via getUTC* getters
+const tzEpoch=(y,m,d,h,mi)=>Date.UTC(y,m,d==null?1:d,h||0,mi||0)/1000-TZOFF;  // IST wall time -> epoch
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function fmtPct(v){return (v==null)?'—':(Math.round(v*10)/10)+'%';}
+function pad2(n){return String(n).padStart(2,'0');}
+function fmtCountdown(epoch){
+  if(!epoch) return '—';
+  let s=epoch-Math.floor(Date.now()/1000);
+  if(s<=0) return 'resetting…';
+  const h=Math.floor(s/3600); s-=h*3600; const m=Math.floor(s/60); const sec=s-m*60;
+  if(h>0) return h+'h '+m+'m';
+  if(m>0) return m+'m '+sec+'s';
+  return sec+'s';
+}
+function lblClock(x){const d=tzD(x);return pad2(d.getUTCHours())+':'+pad2(d.getUTCMinutes());}
+function lblDate(x){const d=tzD(x);return (d.getUTCMonth()+1)+'/'+d.getUTCDate();}
+function lblFull(x){const d=tzD(x);return (d.getUTCMonth()+1)+'/'+d.getUTCDate()+' '+pad2(d.getUTCHours())+':'+pad2(d.getUTCMinutes());}
+function lblStamp(x){const d=tzD(x);return d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1)+'-'+pad2(d.getUTCDate())+' '+pad2(d.getUTCHours())+':'+pad2(d.getUTCMinutes())+' '+TZLABEL;}
+function monthKeyOf(ep){const d=tzD(ep);return pad2(d.getUTCFullYear()%100)+'-'+pad2(d.getUTCMonth()+1);}
+
+// --- native picker <-> epoch helpers (all IST wall time) ---
+function defaultEpoch(){return (IDX&&IDX.last_epoch)||Math.floor(Date.now()/1000);}
+function dayFloor(ep){const d=tzD(ep);return tzEpoch(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate());}
+function isoMondayOf(ep){const d=tzD(ep);const dn=(d.getUTCDay()+6)%7;return tzEpoch(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()-dn);}
+function isoWeekStart(y,w){const j=new Date(Date.UTC(y,0,4));const dn=(j.getUTCDay()+6)%7;return tzEpoch(y,0,4-dn+(w-1)*7);}
+function isoWeekParts(ep){const d=tzD(ep);const t=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()));const dn=(t.getUTCDay()+6)%7;t.setUTCDate(t.getUTCDate()-dn+3);const ft=new Date(Date.UTC(t.getUTCFullYear(),0,4));const fn=(ft.getUTCDay()+6)%7;ft.setUTCDate(ft.getUTCDate()-fn+3);return {year:t.getUTCFullYear(),week:1+Math.round((t-ft)/(7*86400000))};}
+function fmtDateInput(ep){const d=tzD(ep);return d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1)+'-'+pad2(d.getUTCDate());}
+function fmtMonthInput(ep){const d=tzD(ep);return d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1);}
+function fmtWeekInput(ep){const p=isoWeekParts(ep);return p.year+'-W'+pad2(p.week);}
+
+function periodWindow(){
+  const el=document.getElementById('period'), v=el?el.value:'';
+  if(FREQ==='daily'){
+    let s; const m=v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    s = m ? tzEpoch(+m[1],+m[2]-1,+m[3]) : dayFloor(defaultEpoch());
+    return [s,s+86400];                                   // fixed-offset tz: a day is 24h
+  }
+  if(FREQ==='weekly'){
+    let s; const m=v.match(/^(\d{4})-W(\d{1,2})$/);
+    s = m ? isoWeekStart(+m[1],+m[2]) : isoMondayOf(defaultEpoch());
+    return [s,s+7*86400];
+  }
+  let y,mo; const m=v.match(/^(\d{4})-(\d{2})$/);
+  if(m){y=+m[1];mo=+m[2];} else {const d=tzD(defaultEpoch());y=d.getUTCFullYear();mo=d.getUTCMonth()+1;}
+  return [tzEpoch(y,mo-1,1),tzEpoch(y,mo,1)];
+}
+function periodTitle(){
+  const d=tzD(periodWindow()[0]);
+  if(FREQ==='daily') return WD[d.getUTCDay()]+' '+MON[d.getUTCMonth()]+' '+d.getUTCDate()+', '+d.getUTCFullYear();
+  if(FREQ==='weekly') return 'Week of '+MON[d.getUTCMonth()]+' '+d.getUTCDate()+', '+d.getUTCFullYear();
+  return MON[d.getUTCMonth()]+' '+d.getUTCFullYear();
+}
+function neededKeys(start,end){const s=new Set([monthKeyOf(start),monthKeyOf(end-1)]);return [...s];}
+
+function bucketStart(ep){
+  const d=tzD(ep),y=d.getUTCFullYear(),m=d.getUTCMonth(),day=d.getUTCDate(),h=d.getUTCHours();
+  if(FREQ==='daily') return tzEpoch(y,m,day,h);                 // hour
+  if(FREQ==='weekly') return tzEpoch(y,m,day,Math.floor(h/6)*6); // 6h
+  return tzEpoch(y,m,day);                                       // day
+}
+function downsample(points){ // peak (max) per bucket
+  const m=new Map();
+  points.forEach(p=>{const b=bucketStart(p.x);const cur=m.get(b);if(cur===undefined||p.y>cur)m.set(b,p.y);});
+  return [...m.entries()].map(e=>({x:e[0],y:e[1]})).sort((a,b)=>a.x-b.x);
+}
+function windowSeries(acc,key,start,end){
+  const pts=(acc.points||[]).filter(p=>p&&p.status==='ok'&&p.ts_epoch>=start&&p.ts_epoch<end&&p[key]&&p[key].pct!=null)
+    .map(p=>({x:p.ts_epoch,y:p[key].pct}));
+  return downsample(pts);
+}
+
+function buildChart(series, xmin, xmax, xticks, tfmt){
+  const W=720,H=240,padL=42,padR=14,padT=14,padB=30;
+  const xr=(xmax-xmin)||1;
+  const px=x=>padL+(x-xmin)/xr*(W-padL-padR);
+  const py=y=>(H-padB)-(Math.max(0,Math.min(100,y))/100)*(H-padT-padB);
+  let any=false, body='';
+  [0,25,50,75,100].forEach(g=>{const y=py(g);body+=`<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" class="grid"/><text x="${padL-6}" y="${y+3}" class="ylab">${g}</text>`;});
+  xticks.forEach(t=>{const x=px(t.x);body+=`<line x1="${x}" y1="${padT}" x2="${x}" y2="${H-padB}" class="vgrid"/><text x="${x}" y="${H-padB+18}" class="xlab">${esc(t.label)}</text>`;});
+  const cols=new Map();  // bucket epoch -> pct per series (columns align: shared bucketStart)
+  series.forEach((s,i)=>{
+    const pts=(s.points||[]).filter(p=>p.x>=xmin&&p.x<=xmax).sort((a,b)=>a.x-b.x);
+    if(pts.length) any=true;
+    if(pts.length>1){const d=pts.map(p=>px(p.x).toFixed(1)+','+py(p.y).toFixed(1)).join(' ');body+=`<polyline points="${d}" fill="none" stroke="${s.color}" stroke-width="2"/>`;}
+    pts.forEach(p=>{
+      body+=`<circle cx="${px(p.x).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="2.6" fill="${s.color}"/>`;
+      const c=cols.get(p.x)||series.map(()=>null); c[i]=p.y; cols.set(p.x,c);
+    });
+  });
+  if(!any) return '<div class="empty">no data for this period</div>';
+  const colArr=[...cols.entries()].sort((a,b)=>a[0]-b[0]).map(([x,v])=>({
+    x:+px(x).toFixed(1), label:tfmt(x), v, y:v.map(p=>p==null?null:+py(p).toFixed(1))}));
+  body+=`<g class="hov" style="display:none"><line class="xhair" x1="0" y1="${padT}" x2="0" y2="${H-padB}"/>`+
+    series.map(s=>`<circle class="hdot" r="4" fill="${s.color}"/>`).join('')+`</g>`;
+  const meta={series:series.map(s=>({name:s.name,color:s.color})),cols:colArr};
+  return `<svg viewBox="0 0 ${W} ${H}" class="chart" data-chart="${esc(JSON.stringify(meta))}">${body}</svg>`;
+}
+function periodTicks(start,end){
+  const out=[];
+  if(FREQ==='daily'){const d=new Date(start*1000);for(let h=0;h<=24;h+=6)out.push({x:new Date(d.getFullYear(),d.getMonth(),d.getDate(),h).getTime()/1000,label:pad2(h)+':00'});}
+  else if(FREQ==='weekly'){const d=new Date(start*1000);for(let i=0;i<=7;i++){const x=new Date(d.getFullYear(),d.getMonth(),d.getDate()+i).getTime()/1000;out.push({x,label:lblDate(x)});}}
+  else{for(let i=0;i<=6;i++){const x=start+(end-start)*i/6;out.push({x,label:lblDate(x)});}}
+  return out;
+}
+
+// --- column hover: crosshair + one combined tooltip (both series) per chart ---
+let HOV=null;   // {svg} currently hovered chart
+function hideHover(){
+  if(!HOV) return;
+  const g=HOV.svg.querySelector('.hov'); if(g) g.style.display='none';
+  const card=HOV.svg.closest('.card'), tip=card&&card.querySelector('.tip');
+  if(tip) tip.classList.remove('show');
+  HOV=null;
+}
+function chartHover(e){
+  const svg=(e.target&&e.target.closest)?e.target.closest('svg.chart'):null;
+  if(!svg){hideHover();return;}
+  if(HOV&&HOV.svg!==svg) hideHover();
+  const meta=svg.__m||(svg.__m=JSON.parse(svg.dataset.chart||'null'));
+  if(!meta||!meta.cols.length) return;
+  const r=svg.getBoundingClientRect(), k=r.width/svg.viewBox.baseVal.width;
+  const vx=(e.clientX-r.left)/k;                       // mouse x in viewBox coords
+  let col=meta.cols[0];
+  for(const c of meta.cols) if(Math.abs(c.x-vx)<Math.abs(col.x-vx)) col=c;
+  const g=svg.querySelector('.hov'); g.style.display='';
+  const xh=g.querySelector('.xhair'); xh.setAttribute('x1',col.x); xh.setAttribute('x2',col.x);
+  g.querySelectorAll('.hdot').forEach((d,i)=>{
+    if(col.y[i]==null){d.style.display='none';return;}
+    d.style.display=''; d.setAttribute('cx',col.x); d.setAttribute('cy',col.y[i]);
+  });
+  const card=svg.closest('.card'), tip=card.querySelector('.tip');
+  tip.innerHTML=`<div class="tip-t">${esc(col.label)}</div>`+meta.series.map((s,i)=>
+    `<div class="tip-r"><i style="background:${s.color}"></i>${esc(s.name)}<b>${fmtPct(col.v[i])}</b></div>`).join('');
+  tip.classList.add('show');
+  const cr=card.getBoundingClientRect();
+  const cx=r.left-cr.left+col.x*k;                     // crosshair x in card coords
+  let left=cx+12;                                      // right of the line by default
+  if(left+tip.offsetWidth>card.clientWidth-6) left=cx-12-tip.offsetWidth;  // flip left
+  left=Math.max(6,Math.min(left,card.clientWidth-tip.offsetWidth-6));      // clamp
+  tip.style.left=left+'px';
+  tip.style.top=(r.top-cr.top+8)+'px';                 // fixed anchor at plot top
+  HOV={svg};
+}
+
+const LEGEND=`<span class="legend"><span class="lg"><i style="background:${C5}"></i>5-hour</span><span class="lg"><i style="background:${CW}"></i>weekly</span></span>`;
+function metric(label,w,live){
+  const pct=(w&&w.pct!=null)?w.pct:null;
+  const reset=(w&&w.resets_epoch)?w.resets_epoch:0;
+  const sub=live?`resets in <span class="countdown" data-resets="${reset}">—</span>`:'&nbsp;';
+  return `<div class="metric"><div class="mlabel">${esc(label)}</div><div class="mval">${fmtPct(pct)}</div><div class="mreset">${sub}</div></div>`;
+}
+function chipClass(st){return ({ok:'ok',stale_token:'warn',rate_limited:'bad',forbidden_scope:'warn',no_credentials:'warn'}[st])||'muted';}
+function latestInWindow(acc,start,end,okOnly){const ps=acc.points||[];for(let i=ps.length-1;i>=0;i--){const p=ps[i];if(p.ts_epoch>=start&&p.ts_epoch<end&&(!okOnly||p.status==='ok'))return p;}return null;}
+
+function accountPanel(label,acc,start,end,live){
+  const lo=latestInWindow(acc,start,end,true)||{}, lp=latestInWindow(acc,start,end,false)||{};
+  const status=lp.status||'—';
+  const meta=`<div class="meta"><span class="chip ${chipClass(status)}">${esc(status)}</span>`+
+    (acc.tier?' · '+esc(acc.tier):'')+(acc.email?' · '+esc(acc.email):'')+(lp.ts_epoch?' · latest '+esc(lblStamp(lp.ts_epoch)):(lp.ts?' · latest '+esc(lp.ts):''))+`</div>`;
+  let strip=metric('5-hour window',lo.five_hour,live)+metric('weekly window',lo.seven_day,live);
+  if(lo.seven_day_opus) strip+=metric('weekly · opus',lo.seven_day_opus,live);
+  if(lo.seven_day_sonnet) strip+=metric('weekly · sonnet',lo.seven_day_sonnet,live);
+  const s=[{name:'5-hour',color:C5,points:windowSeries(acc,'five_hour',start,end)},
+           {name:'weekly',color:CW,points:windowSeries(acc,'seven_day',start,end)}];
+  const tfmt=(FREQ==='daily')?lblClock:lblFull;
+  const chart=buildChart(s,start,end,periodTicks(start,end),tfmt);
+  return meta+`<div class="strip">${strip}</div>`+
+    `<div class="card"><div class="chart-head"><span class="chart-title">${esc(periodTitle())}</span>${LEGEND}</div>${chart}<div class="tip"></div></div>`;
+}
+
+function accountLabels(merged){const ord=((IDX&&IDX.accounts)||[]).filter(l=>merged[l]);Object.keys(merged).forEach(l=>{if(ord.indexOf(l)<0)ord.push(l);});return ord;}
+function tickCountdowns(){document.querySelectorAll('.countdown').forEach(el=>{el.textContent=fmtCountdown(parseInt(el.dataset.resets||'0',10));});}
+function showError(msg){const p=document.getElementById('panels');if(p)p.innerHTML=`<div class="empty">${esc(msg)}</div>`;}
+
+function fetchMonth(key){
+  if(CACHE[key]) return Promise.resolve(CACHE[key]);
+  const url=(key===IDX.current_month)?'current.json':(key+'.json');
+  return fetch(url,{cache:'no-store'}).then(r=>r.ok?r.json():{accounts:{}}).catch(()=>({accounts:{}}))
+    .then(doc=>{CACHE[key]=doc;return doc;});
+}
+
+function render(){
+  const [start,end]=periodWindow();
+  const live=end>=Date.now()/1000;
+  Promise.all(neededKeys(start,end).map(fetchMonth)).then(docs=>{
+    HOV=null;                                   // panels innerHTML is about to be replaced
+    const merged={};
+    docs.forEach(doc=>{Object.keys(doc.accounts||{}).forEach(l=>{
+      const a=doc.accounts[l];const t=merged[l]||(merged[l]={label:l,tier:a.tier,email:a.email,points:[]});
+      if(a.tier)t.tier=a.tier; if(a.email)t.email=a.email; t.points=t.points.concat(a.points||[]);
+    });});
+    Object.values(merged).forEach(a=>a.points.sort((x,y)=>(x.ts_epoch||0)-(y.ts_epoch||0)));
+    const labels=accountLabels(merged);
+    if(!labels.length){showError('No accounts in this period.');return;}
+    if(ACTIVE===null||labels.indexOf(ACTIVE)<0) ACTIVE=labels[0];   // keep current tab if still present
+    const tabs=document.getElementById('tabs'),panels=document.getElementById('panels');
+    tabs.innerHTML=labels.map(l=>`<button class="tab${l===ACTIVE?' active':''}" data-tab="${esc(l)}">${esc(l)}</button>`).join('');
+    panels.innerHTML=labels.map(l=>`<section class="panel${l===ACTIVE?' active':''}" data-label="${esc(l)}">${accountPanel(l,merged[l],start,end,live)}</section>`).join('');
+    tabs.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>{
+      ACTIVE=btn.dataset.tab;
+      tabs.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===ACTIVE));
+      panels.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.dataset.label===ACTIVE));
+    }));
+    tickCountdowns();
+  });
+}
+
+function buildPeriodInput(){
+  const box=document.getElementById('periodbox'), def=defaultEpoch();
+  const f=(IDX&&IDX.first_epoch), l=(IDX&&IDX.last_epoch);
+  let type,val,fmt;
+  if(FREQ==='daily'){type='date';fmt=fmtDateInput;}
+  else if(FREQ==='weekly'){type='week';fmt=fmtWeekInput;}
+  else{type='month';fmt=fmtMonthInput;}
+  val=fmt(def);
+  const rng=(f!=null&&l!=null)?` min="${fmt(f)}" max="${fmt(l)}"`:'';
+  box.innerHTML=`<input type="${type}" id="period" value="${val}"${rng}>`;
+  document.getElementById('period').addEventListener('change',()=>render());  // ACTIVE untouched
+}
+function buildFreqButtons(){
+  const box=document.getElementById('freq');
+  box.innerHTML=FREQS.map(f=>`<button data-f="${f}" class="${f===FREQ?'active':''}">${f}</button>`).join('');
+  box.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    FREQ=b.dataset.f;                                       // ACTIVE untouched -> tab stays
+    box.querySelectorAll('button').forEach(x=>x.classList.toggle('active',x.dataset.f===FREQ));
+    buildPeriodInput(); render();
+  }));
+}
+
+function boot(){
+  document.getElementById('tz').textContent='Asia/Kolkata ('+TZLABEL+')';
+  const pn=document.getElementById('panels');   // delegation: survives innerHTML regeneration
+  pn.addEventListener('pointermove',chartHover);
+  pn.addEventListener('pointerdown',chartHover);  // touch: tap shows the tooltip
+  pn.addEventListener('pointerleave',hideHover);
+  fetch('index.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(idx=>{
+      IDX=idx;
+      document.getElementById('gen').textContent=idx.generated_epoch?lblStamp(idx.generated_epoch):(idx.generated_at||'—');
+      FREQ=FREQS.indexOf(idx.default_view)>=0?idx.default_view:'monthly';
+      buildFreqButtons();
+      buildPeriodInput();
+      render();
+    })
+    .catch(e=>showError('Could not load index.json ('+e+').<br>file:// blocks fetch — serve this folder over HTTP, e.g. python3 -m http.server -d <dir>, then open http://localhost:8000/'));
+}
+boot();
+setInterval(tickCountdowns,1000);
+</script>
+</body></html>
